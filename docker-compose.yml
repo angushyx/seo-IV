@@ -1,0 +1,12 @@
+services:
+  rag-app:
+    build: .
+    container_name: rag-system
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.local
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+    restart: unless-stopped
