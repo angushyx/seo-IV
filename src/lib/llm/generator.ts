@@ -13,6 +13,7 @@ export interface PlanningReport {
   contentStrategy: string;
   riskWarnings: string[];
   disclaimer: string;
+  isFallback?: boolean; // true when JSON parse failed and raw text was used
 }
 
 export interface OutlineSection {
@@ -26,7 +27,10 @@ export interface OutlineSection {
 // ============================================================
 
 function buildPrompt(keyword: string, serpAnalysis: string, ragDocs: string): string {
-  return `你是一位資深 SEO 內容規劃師，專精於台灣金融科技領域。請綜合以下兩份資料，針對關鍵字「${keyword}」產出一份完整的 SEO 文章撰寫規劃建議書。
+  const now = new Date();
+  const currentDate = `${now.getFullYear()} 年 ${now.getMonth() + 1} 月`;
+
+  return `你是一位資深 SEO 內容規劃師，專精於台灣金融科技領域。目前日期為 ${currentDate}。請綜合以下兩份資料，針對關鍵字「${keyword}」產出一份完整的 SEO 文章撰寫規劃建議書。
 
 ## 第一份資料：外部 SERP 競爭分析
 ${serpAnalysis}
@@ -62,8 +66,90 @@ ${ragDocs}
 2. **YMYL 合規**：所有利率數據必須標明來源，禁止使用上述禁用語
 3. **E-E-A-T**：outline 中必須包含至少 1 個 source 為 "compliance" 的段落，涵蓋銀行與民間二胎的法律權益差異
 4. **搜尋意圖**：標題和結構需滿足使用者的實際搜尋需求
+5. **時間正確性**：目前為 ${currentDate}，所有內容請以 ${now.getFullYear()} 年為基準，勿使用過時年份
 
 請嚴格以 JSON 格式輸出，不要附加其他說明文字。`;
+}
+
+// ============================================================
+// JSON 修復工具
+// ============================================================
+
+function repairJSON(raw: string): string {
+  let json = raw.trim();
+
+  // 移除 markdown code block wrapper
+  const codeBlockMatch = json.match(/```json\s*([\s\S]*?)\s*```/);
+  if (codeBlockMatch) json = codeBlockMatch[1].trim();
+
+  // 嘗試截取最外層 { ... }
+  const firstBrace = json.indexOf('{');
+  const lastBrace = json.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    json = json.slice(firstBrace, lastBrace + 1);
+  }
+
+  // 修復常見 LLM JSON 問題
+  json = json
+    .replace(/,\s*]/g, ']')       // trailing comma in array
+    .replace(/,\s*}/g, '}')       // trailing comma in object
+    .replace(/[\r\n]+/g, ' ')     // 移除所有換行（最常見的 LLM 錯誤）
+    .replace(/\t/g, ' ')          // Tab 改空格
+    .replace(/\s{2,}/g, ' ')      // 合併多餘空格
+    .replace(/""\s*"/g, '""')     // 修復空字串後的引號
+    .replace(/"\s*"/g, '" "');    // 修復斷開的字串引號
+
+  return json;
+}
+
+function safeParseJSON(text: string): PlanningReport | null {
+  // 第一次嘗試：直接解析 code block
+  try {
+    const match = text.match(/```json\s*([\s\S]*?)\s*```/);
+    if (match?.[1]) {
+      const cleaned = match[1].replace(/[\r\n]+/g, ' ').replace(/\t/g, ' ');
+      return JSON.parse(cleaned);
+    }
+  } catch { /* 繼續 */ }
+
+  // 第二次嘗試：直接解析 { }
+  try {
+    const match = text.match(/(\{[\s\S]*\})/);
+    if (match?.[1]) {
+      const cleaned = match[1].replace(/[\r\n]+/g, ' ').replace(/\t/g, ' ');
+      return JSON.parse(cleaned);
+    }
+  } catch { /* 繼續修復 */ }
+
+  // 第三次嘗試：完整修復後解析
+  try {
+    return JSON.parse(repairJSON(text));
+  } catch (e) {
+    console.error('[LLM] JSON 修復仍失敗:', e instanceof Error ? e.message : e);
+  }
+
+  // 第四次嘗試：修復截斷的 JSON（找最後一個完整 } 後手動關陣）
+  try {
+    const firstBrace = text.indexOf('{');
+    if (firstBrace >= 0) {
+      // 找到最後一個完整的 } 來關陣 JSON
+      const lastClosingBrace = text.lastIndexOf('}');
+      if (lastClosingBrace > firstBrace) {
+        let truncated = text.slice(firstBrace, lastClosingBrace + 1);
+        truncated = truncated
+          .replace(/,\s*$/, '')         // 移除末尾 comma
+          .replace(/,\s*](\s*)$/, ']$1') // 修復未閉合的陣列
+          .replace(/,\s*}(\s*)$/, '}$1'); // 修復未閉合的物件
+        // 尝試修復並封閉未完成的陣列
+        truncated = truncated.replace(/("outline":\s*\[)[^\]]*$/, '$1]');
+        const cleaned = truncated.replace(/[\r\n]+/g, ' ').replace(/\t/g, ' ');
+        const parsed = JSON.parse(cleaned);
+        if (parsed && parsed.title) return parsed;
+      }
+    }
+  } catch { /* 放棄 */ }
+
+  return null;
 }
 
 // ============================================================
@@ -71,7 +157,7 @@ ${ragDocs}
 // ============================================================
 
 // 模型優先順序：依序嘗試，第一個成功的就用
-const MODEL_FALLBACKS = ['gemini-2.5-flash', 'gemini-2.0-flash'];
+const MODEL_FALLBACKS = ['gemini-3-flash', 'gemini-3-pro', 'gemini-3.1-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'];
 
 export async function generatePlanningReport(
   keyword: string,
@@ -96,34 +182,37 @@ export async function generatePlanningReport(
           temperature: 0.7,
           topP: 0.9,
           topK: 40,
-          maxOutputTokens: 4096,
+          maxOutputTokens: 8192,
+          responseMimeType: 'application/json',
         },
       });
 
       const result = await model.generateContent(prompt);
       const response = result.response;
       const text = response.text();
-      console.log(`[LLM] ✅ ${modelName} 生成成功`);
+      console.log(`[LLM] ✅ ${modelName} 回應成功，解析 JSON...`);
 
-      // Parse JSON from response (handle possible markdown code blocks)
-      const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/) || text.match(/({[\s\S]*})/);
-      if (!jsonMatch || !jsonMatch[1]) {
+      // 嘗試解析 JSON（含自動修復）
+      const parsed = safeParseJSON(text);
+
+      if (!parsed) {
+        console.warn(`[LLM] ⚠️ ${modelName} JSON 全數解析失敗，使用原始文字作為 fallback`);
         return {
           title: `${keyword} — SEO 撰寫規劃建議書`,
           outline: [{
-            heading: '規劃內容',
-            description: text,
+            heading: '規劃內容（原始輸出）',
+            description: text.slice(0, 500),
             source: 'seo_strategy' as const,
           }],
           complianceNotes: ['請參考內部合規手冊'],
-          contentStrategy: text,
+          contentStrategy: text.slice(0, 1000),
           riskWarnings: ['本文僅供參考'],
           disclaimer: '本文僅供參考，不構成任何金融投資建議。',
+          isFallback: true,
         };
       }
 
-      const parsed = JSON.parse(jsonMatch[1]) as PlanningReport;
-
+      console.log(`[LLM] ✅ ${modelName} JSON 解析成功`);
       return {
         title: parsed.title || `${keyword} — SEO 撰寫規劃建議書`,
         outline: Array.isArray(parsed.outline) ? parsed.outline : [],

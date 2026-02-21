@@ -55,7 +55,8 @@ export async function POST(request: NextRequest) {
     // Step 2: RAG Retrieval
     console.log('[API] Initializing RAG pipeline...');
     await ensureRAGInitialized();
-    const retrievedDocs = await ragPipeline.retrieve(keyword, 3);
+    const ragResult = await ragPipeline.retrieve(keyword, 3);
+    const { docs: retrievedDocs, skipped: skippedDocs, threshold } = ragResult;
     const ragFormatted = ragPipeline.formatRetrievedDocs(retrievedDocs);
 
     // Step 3: Generate Planning Report via LLM
@@ -73,32 +74,66 @@ export async function POST(request: NextRequest) {
       ragRetrieval: {
         summary: ragFormatted,
         documents: retrievedDocs,
+        skipped: skippedDocs,
+        threshold,
       },
       planningReport,
       metadata: {
         timestamp: new Date().toISOString(),
         skillsUsed: ['serp-analyzer'],
         ragChunksRetrieved: retrievedDocs.length,
+        ragChunksSkipped: skippedDocs.length,
       },
     });
   } catch (error) {
     console.error('[API] Error:', error);
     const message = error instanceof Error ? error.message : 'Unknown error';
 
-    // Provide helpful error messages
+    // 分類錯誤，給前端清楚的訊息
     if (message.includes('GEMINI_API_KEY')) {
-      return NextResponse.json(
-        {
-          error: 'Gemini API Key 未設定。請在 .env.local 中設定 GEMINI_API_KEY。',
-          hint: '前往 https://aistudio.google.com/apikey 取得 API Key',
-        },
-        { status: 500 }
-      );
+      return NextResponse.json({
+        error: '❌ Gemini API Key 未設定',
+        errorType: 'api_key',
+        hint: '請在 .env.local 中設定 GEMINI_API_KEY，然後執行 docker restart rag-system',
+      }, { status: 500 });
     }
 
-    return NextResponse.json(
-      { error: `分析失敗：${message}` },
-      { status: 500 }
-    );
+    if (message.includes('429') || message.includes('quota') || message.includes('Too Many Requests')) {
+      return NextResponse.json({
+        error: '⏳ Gemini API 免費額度已用完',
+        errorType: 'quota',
+        hint: '請等待幾分鐘後重試，或到 Google AI Studio 查看額度狀態',
+      }, { status: 429 });
+    }
+
+    if (message.includes('Qdrant')) {
+      return NextResponse.json({
+        error: '🗄️ Qdrant Cloud 連線失敗',
+        errorType: 'qdrant',
+        hint: '請確認 .env.local 中的 QDRANT_URL 和 QDRANT_API_KEY 是否正確',
+      }, { status: 500 });
+    }
+
+    if (message.includes('RAG') || message.includes('Manual.txt')) {
+      return NextResponse.json({
+        error: '📄 RAG 初始化失敗',
+        errorType: 'rag_init',
+        hint: '請確認 data/Manual.txt 存在且 Gemini Embedding API 可正常運作',
+      }, { status: 500 });
+    }
+
+    if (message.includes('所有模型均失敗')) {
+      return NextResponse.json({
+        error: '🤖 LLM 生成失敗（所有模型都無法使用）',
+        errorType: 'llm',
+        hint: '可能是 API 額度不足或網路問題，請稍後重試',
+      }, { status: 500 });
+    }
+
+    return NextResponse.json({
+      error: `❌ 分析失敗：${message}`,
+      errorType: 'unknown',
+      hint: '請查看 Docker 日誌取得更多資訊：docker logs rag-system',
+    }, { status: 500 });
   }
 }

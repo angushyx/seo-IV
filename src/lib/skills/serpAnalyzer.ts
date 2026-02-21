@@ -1,7 +1,11 @@
 // SERP Analyzer Skill - Custom Skill for analyzing SERP data
-// Extracts heading structure, keyword distribution, and identifies content gaps
+// Architecture: 1 Skill → 3 Agents
+//   Agent 1: Heading Structure Extractor (靜態演算法)
+//   Agent 2: Keyword Distribution Analyzer (靜態演算法)
+//   Agent 3: Content Gap Generator (LLM 動態分析)
 
 import serpData from '../../../data/SERP_Data.json';
+import { generateContentGaps } from './contentGapGenerator';
 
 // ============================================================
 // Types
@@ -41,17 +45,22 @@ export interface SerpAnalysisResult {
   contentGaps: ContentGap[];
   competitorCount: number;
   analysisTimestamp: string;
+  agentResults: {
+    headingAgent: string;
+    keywordAgent: string;
+    contentGapAgent: string;
+  };
 }
 
 // ============================================================
-// Core Functions
+// Agent 1: Heading Structure Extractor
+// 提取競爭對手的 H1/H2 標題結構
 // ============================================================
 
-/**
- * Extract heading structure (H1/H2) from all SERP entries
- */
-function extractHeadingStructure(data: SerpEntry[]): HeadingAnalysis[] {
-  return data.map((entry) => {
+function agentExtractHeadingStructure(data: SerpEntry[]): HeadingAnalysis[] {
+  console.log('[Agent-1] 提取標題結構...');
+
+  const result = data.map((entry) => {
     if (!entry || typeof entry !== 'object') {
       throw new Error(`Invalid SERP entry at rank ${(entry as unknown as SerpEntry)?.rank ?? 'unknown'}`);
     }
@@ -64,14 +73,21 @@ function extractHeadingStructure(data: SerpEntry[]): HeadingAnalysis[] {
       source_authority: entry.source_authority || 'Unknown',
     };
   });
+
+  const totalH2 = result.reduce((sum, r) => sum + r.h2List.length, 0);
+  console.log(`[Agent-1] ✅ 完成：${result.length} 位競爭對手、${totalH2} 個 H2 標籤`);
+  return result;
 }
 
-/**
- * Analyze keyword distribution across all SERP entries
- * Segments Chinese text and counts keyword frequency
- */
-function analyzeKeywordDistribution(data: SerpEntry[]): KeywordFrequency[] {
-  // Define key financial/real-estate terms to track
+// ============================================================
+// Agent 2: Keyword Distribution Analyzer
+// 識別關鍵字在 SERP 中的分布情況
+// ============================================================
+
+function agentAnalyzeKeywordDistribution(data: SerpEntry[]): KeywordFrequency[] {
+  console.log('[Agent-2] 分析關鍵字分布...');
+
+  // 金融不動產領域關鍵字詞庫
   const targetKeywords = [
     '房屋二胎', '二胎房貸', '利率', '銀行', '民間',
     '申請', '風險', '額度', '撥款', '流程',
@@ -102,28 +118,52 @@ function analyzeKeywordDistribution(data: SerpEntry[]): KeywordFrequency[] {
     });
   });
 
-  return Array.from(keywordMap.entries())
+  const result = Array.from(keywordMap.entries())
     .map(([keyword, data]) => ({
       keyword,
       count: data.count,
       appearsIn: Array.from(data.appearsIn).sort((a, b) => a - b),
     }))
     .sort((a, b) => b.count - a.count);
+
+  console.log(`[Agent-2] ✅ 完成：追蹤 ${targetKeywords.length} 個關鍵字，${result.length} 個有出現`);
+  return result;
+}
+
+// ============================================================
+// Agent 3: Content Gap Generator (LLM-Powered)
+// 使用 Gemini LLM 動態識別內容缺口
+// ============================================================
+
+async function agentGenerateContentGaps(data: SerpEntry[]): Promise<{ gaps: ContentGap[]; method: string }> {
+  console.log('[Agent-3] LLM 分析內容缺口...');
+
+  try {
+    const result = await generateContentGaps(data);
+    console.log(`[Agent-3] ✅ 完成：識別出 ${result.gaps.length} 個內容缺口（${result.analysisMethod}）`);
+    return {
+      gaps: result.gaps,
+      method: result.analysisMethod,
+    };
+  } catch (error) {
+    console.warn(`[Agent-3] ⚠️ LLM 分析失敗，退回靜態分析:`, error);
+    // Fallback：靜態比對
+    const gaps = staticContentGapFallback(data);
+    return {
+      gaps,
+      method: '靜態比對（LLM 降級）',
+    };
+  }
 }
 
 /**
- * Identify content gaps - topics that top-ranking pages are NOT covering
+ * 靜態 Content Gap 分析（當 LLM 不可用時的降級方案）
  */
-function identifyContentGaps(data: SerpEntry[]): ContentGap[] {
-  // Collect all existing H2 topics
-  const allH2Topics = data.flatMap((entry) =>
-    Array.isArray(entry.h2) ? entry.h2 : []
-  );
+function staticContentGapFallback(data: SerpEntry[]): ContentGap[] {
   const allText = data.map((e) =>
     [e.title, ...(e.h2 || []), e.snippet].join(' ')
   ).join(' ');
 
-  // Define potential user pain points that may be missing
   const potentialTopics: { topic: string; keywords: string[]; reasoning: string; priority: 'high' | 'medium' | 'low' }[] = [
     {
       topic: '房屋二胎對個人信用評分的長期影響',
@@ -138,13 +178,13 @@ function identifyContentGaps(data: SerpEntry[]): ContentGap[] {
       priority: 'high',
     },
     {
-      topic: '房屋二胎 vs 其他融資管道橫向比較（信貸、保單借款、股票質借）',
+      topic: '房屋二胎 vs 其他融資管道橫向比較',
       keywords: ['信貸', '保單借款', '融資比較'],
       reasoning: '使用者通常有多種融資選擇，橫向比較有助於決策',
       priority: 'medium',
     },
     {
-      topic: '二胎房貸的稅務影響（房地合一稅、房屋稅）',
+      topic: '二胎房貸的稅務影響',
       keywords: ['稅務', '房地合一', '節稅'],
       reasoning: '稅務是房屋交易的重要面向，但目前 SERP 幾乎沒有提及',
       priority: 'medium',
@@ -155,42 +195,33 @@ function identifyContentGaps(data: SerpEntry[]): ContentGap[] {
       reasoning: '目前只有成功案例分享，缺乏拒貸案例的學習機會',
       priority: 'high',
     },
-    {
-      topic: '不同地區房屋二胎成數與利率差異（都會 vs 偏鄉）',
-      keywords: ['地區差異', '台北', '偏鄉', '成數'],
-      reasoning: '房屋所在地對二胎核貸條件影響很大，但缺乏地區層面的分析',
-      priority: 'medium',
-    },
-    {
-      topic: '房屋二胎結清後的注意事項（塗銷設定、權狀歸還）',
-      keywords: ['塗銷', '結清', '設定塗銷'],
-      reasoning: '結清後的後續處理是容易被忽略的重要環節',
-      priority: 'low',
-    },
   ];
 
-  // Check which topics are genuinely missing
   return potentialTopics.filter((potential) => {
-    const isCovered = potential.keywords.some((kw) =>
-      allH2Topics.some((h2) => h2.includes(kw)) || allText.includes(kw)
-    );
+    const isCovered = potential.keywords.some((kw) => allText.includes(kw));
     return !isCovered;
-  }).map(({ topic, reasoning, priority }) => ({
-    topic,
-    reasoning,
-    priority,
-  }));
+  }).map(({ topic, reasoning, priority }) => ({ topic, reasoning, priority }));
 }
 
 // ============================================================
-// Main Skill Function
+// Main Skill Orchestrator
+// 1 Skill → 3 Agents → 1 Unified Result
 // ============================================================
 
+export interface AgentProgressCallback {
+  (agent: string, status: string): void;
+}
+
 /**
- * SERP Analyzer Skill - Main entry point
- * Analyzes the provided SERP data and returns structured insights
+ * SERP Analyzer Skill — orchestrates 3 agents:
+ *   1. Heading Structure Agent (靜態)
+ *   2. Keyword Distribution Agent (靜態)
+ *   3. Content Gap Agent (LLM 動態)
  */
-export function analyzeSERP(customData?: SerpEntry[]): SerpAnalysisResult {
+export async function analyzeSERP(
+  customData?: SerpEntry[],
+  onProgress?: AgentProgressCallback,
+): Promise<SerpAnalysisResult> {
   const data = customData || (serpData as SerpEntry[]);
 
   // Validate input
@@ -198,7 +229,6 @@ export function analyzeSERP(customData?: SerpEntry[]): SerpAnalysisResult {
     throw new Error('SERP data must be a non-empty array');
   }
 
-  // Validate each entry
   data.forEach((entry, index) => {
     if (!entry || typeof entry !== 'object') {
       throw new Error(`Invalid entry at index ${index}: must be an object`);
@@ -208,23 +238,34 @@ export function analyzeSERP(customData?: SerpEntry[]): SerpAnalysisResult {
     }
   });
 
-  try {
-    const headingStructure = extractHeadingStructure(data);
-    const keywordDistribution = analyzeKeywordDistribution(data);
-    const contentGaps = identifyContentGaps(data);
+  // Agent 1: Heading Structure
+  onProgress?.('heading', '正在提取標題結構...');
+  const headingStructure = agentExtractHeadingStructure(data);
+  const totalH2 = headingStructure.reduce((sum, r) => sum + r.h2List.length, 0);
+  onProgress?.('heading', `✅ ${data.length} 位競爭對手、${totalH2} 個 H2 標籤`);
 
-    return {
-      headingStructure,
-      keywordDistribution,
-      contentGaps,
-      competitorCount: data.length,
-      analysisTimestamp: new Date().toISOString(),
-    };
-  } catch (error) {
-    throw new Error(
-      `SERP analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-    );
-  }
+  // Agent 2: Keyword Distribution
+  onProgress?.('keyword', '正在分析關鍵字分布...');
+  const keywordDistribution = agentAnalyzeKeywordDistribution(data);
+  onProgress?.('keyword', `✅ ${keywordDistribution.length} 個關鍵字識別完成`);
+
+  // Agent 3: Content Gap (LLM)
+  onProgress?.('gap', '正在使用 LLM 智能分析內容缺口...');
+  const gapResult = await agentGenerateContentGaps(data);
+  onProgress?.('gap', `✅ ${gapResult.method}：${gapResult.gaps.length} 個內容缺口`);
+
+  return {
+    headingStructure,
+    keywordDistribution,
+    contentGaps: gapResult.gaps,
+    competitorCount: data.length,
+    analysisTimestamp: new Date().toISOString(),
+    agentResults: {
+      headingAgent: `${data.length} entries, ${totalH2} H2 tags`,
+      keywordAgent: `${keywordDistribution.length} keywords tracked`,
+      contentGapAgent: `${gapResult.gaps.length} gaps (${gapResult.method})`,
+    },
+  };
 }
 
 /**

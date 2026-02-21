@@ -25,6 +25,12 @@ export interface RetrievedDocument {
   source: string;
 }
 
+export interface RetrieveResult {
+  docs: RetrievedDocument[];        // 超過閾值
+  skipped: RetrievedDocument[];     // 低於閾值被過濾
+  threshold: number;                // 使用的閾值
+}
+
 // ============================================================
 // Vector Store Interface
 // ============================================================
@@ -365,27 +371,42 @@ class RAGPipeline {
   /**
    * Retrieve relevant documents for a query
    */
-  async retrieve(query: string, topK: number = 3): Promise<RetrievedDocument[]> {
+  async retrieve(query: string, topK: number = 3): Promise<RetrieveResult> {
     if (!this.isInitialized || !this.vectorStore || this.vectorStore.size === 0) {
       throw new Error('RAG pipeline not initialized. Call initialize() first.');
     }
 
+    const MIN_SCORE = 0.65; // 相似度閾值
     const queryVector = await getEmbedding(query);
     const results = await this.vectorStore.search(queryVector, topK);
 
-    return results.map((r) => ({
-      content: r.payload.content,
-      chapter: r.payload.metadata.chapter,
-      score: Math.round(r.score * 1000) / 1000,
-      source: r.payload.metadata.source,
-    }));
+    const docs: RetrievedDocument[] = [];
+    const skipped: RetrievedDocument[] = [];
+
+    for (const r of results) {
+      const doc = {
+        content: r.payload.content,
+        chapter: r.payload.metadata.chapter,
+        score: Math.round(r.score * 1000) / 1000,
+        source: r.payload.metadata.source,
+      };
+      if (r.score >= MIN_SCORE) {
+        docs.push(doc);
+      } else {
+        skipped.push(doc);
+        console.warn(`[RAG] 跳過低相似度段落（${(r.score * 100).toFixed(1)}% < ${MIN_SCORE * 100}%）: ${doc.chapter.slice(0, 40)}`);
+      }
+    }
+
+    console.log(`[RAG] 檢索完成：${docs.length}/${results.length} 段超過閾值`);
+    return { docs, skipped, threshold: MIN_SCORE };
   }
 
   /**
    * Format retrieved documents for LLM consumption
    */
   formatRetrievedDocs(docs: RetrievedDocument[]): string {
-    if (docs.length === 0) return '（未檢索到相關合規文件）';
+    if (docs.length === 0) return '（未檢索到相關合規文件，可能關鍵字與合規手冊語義距離過遠）';
 
     let output = '=== 內部合規手冊 — 相關段落 ===\n\n';
     docs.forEach((doc, i) => {

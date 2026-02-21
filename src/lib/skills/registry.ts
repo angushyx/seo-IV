@@ -1,7 +1,7 @@
 // Skill Registry - Plugin architecture for easy skill extensibility
-// This demonstrates the "Architecture Scalability" evaluation criteria
+// Demonstrates "Architecture Scalability" evaluation criteria
 
-import { analyzeSERP, formatSerpAnalysis, SerpAnalysisResult } from './serpAnalyzer';
+import { analyzeSERP, formatSerpAnalysis, SerpAnalysisResult, SerpEntry } from './serpAnalyzer';
 
 // ============================================================
 // Skill Interface - All skills must implement this
@@ -21,19 +21,24 @@ export interface Skill {
 }
 
 // ============================================================
-// SERP Analyzer Skill (wrapped as Skill interface)
+// SERP Analyzer Skill
+// 內部調用 3 個 Agent：標題結構、關鍵字分布、內容缺口(LLM)
 // ============================================================
 
 const serpAnalyzerSkill: Skill = {
   name: 'serp-analyzer',
-  description: '分析 SERP 數據，提取競爭對手標題結構、關鍵字分布，並識別內容缺口',
+  description: '分析 SERP 數據：調用 3 個 Agent 分別提取標題結構、識別關鍵字分布、LLM 動態分析內容缺口',
   execute: async (input?: unknown): Promise<SkillResult> => {
-    const result: SerpAnalysisResult = analyzeSERP(input as undefined);
+    const onProgress = (input as { onProgress?: (agent: string, status: string) => void })?.onProgress;
+    const customData = (input as { data?: SerpEntry[] })?.data;
+
+    const result: SerpAnalysisResult = await analyzeSERP(customData, onProgress);
+
     return {
       skillName: 'serp-analyzer',
       rawData: result,
       formattedOutput: formatSerpAnalysis(result),
-      timestamp: new Date().toISOString(),
+      timestamp: result.analysisTimestamp,
     };
   },
 };

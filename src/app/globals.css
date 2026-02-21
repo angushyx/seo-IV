@@ -214,6 +214,27 @@ body::before {
   to { transform: rotate(360deg); }
 }
 
+/* Fill-from-zero animations for architecture progress bars */
+@keyframes fillBar1 {
+  from { width: 0%; }
+  to { width: var(--bar-w, 100%); }
+}
+@keyframes fillBar2 {
+  from { width: 0%; }
+  to { width: var(--bar-w, 88%); }
+}
+@keyframes fillBar3 {
+  from { width: 0%; }
+  to { width: var(--bar-w, 72%); }
+}
+
+/* Active step progress bar pulse */
+@keyframes progressPulse {
+  0%   { width: 20%; opacity: 1; }
+  50%  { width: 80%; opacity: 0.8; }
+  100% { width: 20%; opacity: 1; }
+}
+
 .animate-fade-in {
   animation: fadeInUp 0.5s ease-out forwards;
 }
