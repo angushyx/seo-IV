@@ -157,7 +157,7 @@ function safeParseJSON(text: string): PlanningReport | null {
 // ============================================================
 
 // 模型優先順序：依序嘗試，第一個成功的就用
-const MODEL_FALLBACKS = ['gemini-3-flash', 'gemini-3-pro', 'gemini-3.1-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'];
+const MODEL_FALLBACKS = ['gemini-2.5-flash'];
 
 export async function generatePlanningReport(
   keyword: string,

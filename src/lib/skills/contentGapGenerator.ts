@@ -69,7 +69,7 @@ ${serpSummary}
 }
 
 // 模型清單（與 generator.ts 同步）
-const MODEL_FALLBACKS = ['gemini-3-flash', 'gemini-3-pro', 'gemini-3.1-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'];
+const MODEL_FALLBACKS = ['gemini-2.5-flash'];
 
 export async function generateContentGaps(serpEntries: SerpEntry[]): Promise<ContentGapResult> {
   const apiKey = process.env.GEMINI_API_KEY;
