@@ -8,41 +8,34 @@
 
 ```mermaid
 flowchart TD
-    U([使用者輸入關鍵字]) --> API[POST /api/analyze/stream\nSSE Streaming]
+    U([使用者輸入關鍵字]) --> API["POST /api/analyze/stream（SSE Streaming）"]
 
-    API --> SKILL[SERP Analyzer Skill]
+    API --> SKILL
 
-    subgraph SKILL[🛠️ SERP Analyzer Skill]
-        A1[Agent-1\n標題結構提取\nH1 / H2 解析] 
-        A2[Agent-2\n關鍵字分布分析\n靜態 regex 計數]
-        A3[Agent-3\nContent Gap 分析\nGemini LLM 動態識別]
+    subgraph SKILL["🛠️ SERP Analyzer Skill"]
+        A1["Agent-1：標題結構提取（H1 / H2 解析）"]
+        A2["Agent-2：關鍵字分布分析（靜態 regex 計數）"]
+        A3["Agent-3：Content Gap 分析（Gemini LLM）"]
         A1 --> A2 --> A3
     end
 
-    SKILL --> RAG[RAG Pipeline]
+    SKILL --> RAG
 
-    subgraph RAG[📚 RAG Pipeline - Qdrant Cloud]
-        R1[Manual.txt 切塊\nchunkManualText]
-        R2[Gemini Embedding\ngemini-embedding-001\n3072 維向量]
-        R3[Qdrant Cloud\nCosine Similarity Top-K]
+    subgraph RAG["📚 RAG Pipeline"]
+        R1["Manual.txt 切塊"]
+        R2["Gemini Embedding（gemini-embedding-001，3072 維）"]
+        R3["Qdrant Cloud（Cosine Similarity Top-3）"]
         R1 --> R2 --> R3
     end
 
-    RAG --> LLM[LLM Generator]
+    RAG --> LLM["🤖 Gemini 2.5 Flash（融合 SERP + RAG → 建議書）"]
 
-    subgraph LLM[🤖 LLM Generator]
-        L1[建構 Prompt\nSERP 分析 + RAG 合規段落\n+ 當前時間 + 硬性合規約束]
-        L2[Gemini 2.5 Flash\nresponseMimeType: json]
-        L3[safeParseJSON\n4 層容錯修復]
-        L1 --> L2 --> L3
-    end
+    LLM --> FE
 
-    LLM --> FE[前端 Next.js]
-
-    subgraph FE[🖥️ 前端 - SSE 即時顯示]
-        T1[📊 SERP 分析 Tab]
-        T2[🛡️ 合規檢索 Tab]
-        T3[✨ SEO 規劃建議書 Tab]
+    subgraph FE["🖥️ 前端 Next.js（SSE 即時顯示）"]
+        T1["📊 SERP 分析 Tab"]
+        T2["🛡️ 合規檢索 Tab"]
+        T3["✨ SEO 規劃建議書 Tab"]
     end
 ```
 
