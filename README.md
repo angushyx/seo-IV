@@ -43,16 +43,6 @@ flowchart TD
 
 ---
 
-## 評核標準對應
-
-| 評核標準 | 實作方式 |
-|---------|---------|
-| **Technical Rigor（技術嚴謹性）** | Skill 具備完整 Error Handling：SERP entry 格式驗證、4 層 JSON 修復、LLM fallback、Qdrant 連線自動降級為 In-Memory |
-| **Prompt Precision（提示詞精確度）** | Prompt 明確要求 LLM 平衡「SERP Content Gap 分析」與「RAG 合規約束」，包含 5 條硬性規則（禁用語、利率標註、EEAT 差異）、動態注入當前日期 |
-| **Architecture Scalability（架構可擴展性）** | Plugin 架構：新增 Skill 只需實作 `Skill` interface 並呼叫 `registry.register()`，無需改動任何現有程式碼 |
-
----
-
 ## 技術棧
 
 | 元件 | 技術 |
